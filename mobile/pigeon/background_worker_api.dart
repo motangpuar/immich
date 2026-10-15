@@ -1,5 +1,14 @@
 import 'package:pigeon/pigeon.dart';
 
+// RUFH Upload Class
+class RufhUploadRequest {
+  final String assetId;
+  final String filePath;
+  final int fileSize;
+  final int fileMtime;
+  final String serverUrl;
+}
+
 @ConfigurePigeon(
   PigeonOptions(
     dartOut: 'lib/platform/background_worker_api.g.dart',
@@ -30,6 +39,12 @@ abstract class BackgroundWorkerFgHostApi {
 
   // iOS Only: true when the OS started the process in the background for one of its background tasks
   bool wasLaunchedInBackground();
+
+  // Marked
+  @async
+  String uploadRufh(RufhUploadRequest request);
+
+  void cancelRufhUpload(String assetId);
 }
 
 @HostApi()

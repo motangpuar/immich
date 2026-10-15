@@ -1,5 +1,15 @@
 package app.alextran.immich.background
 
+import app.alextran.immich.core.HttpClientManager
+import app.alextran.immich.upload.RufhUploader
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import java.io.File
+
 import android.content.Context
 import android.provider.MediaStore
 import android.util.Log
@@ -18,6 +28,8 @@ private const val TAG = "BackgroundWorkerApiImpl"
 
 class BackgroundWorkerApiImpl(context: Context) : BackgroundWorkerFgHostApi {
   private val ctx: Context = context.applicationContext
+  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
 
   override fun enable() {
     enqueueMediaObserver(ctx)
@@ -48,6 +60,42 @@ class BackgroundWorkerApiImpl(context: Context) : BackgroundWorkerFgHostApi {
     // iOS only
     return false
   }
+
+  override fun uploadRufh(request: RufhUploadRequest, callback: (Result<String>) -> Unit) {
+    scope.launch {
+      try {
+        val client: OkHttpClient = HttpClientManager.getClient()
+          .newBuilder()
+          .writeTimeout(0, TimeUnit.SECONDS)  // streaming body, no write timeout
+          .readTimeout(300, TimeUnit.SECONDS)   // wait up to 5 min for server response
+          .callTimeout(0, TimeUnit.SECONDS)
+          .build()
+
+        val uploader = RufhUploader(client, request.serverUrl)
+        val uploadId = uploader.upload(
+          assetId = request.assetId,
+          file = File(request.filePath),
+          deviceId = deviceId(),
+        )
+        // The server returns the upload ID as the asset ID on completion.
+        // If your server returns a different ID in the 201 body, parse it here.
+        withContext(Dispatchers.Main) { callback(Result.success(uploadId)) }
+      } catch (e: Exception) {
+        withContext(Dispatchers.Main) { callback(Result.failure(e)) }
+      }
+    }
+  }
+
+  override fun cancelRufhUpload(assetId: String) {
+    // Optional: track in-flight uploads by assetId and cancel.
+    // For the first cut, no-op is acceptable — WorkManager isn't involved.
+  }
+
+  private fun deviceId(): String =
+    android.provider.Settings.Secure.getString(
+      ctx.contentResolver,
+      android.provider.Settings.Secure.ANDROID_ID,
+  )
 
   companion object {
     private const val BACKGROUND_WORKER_NAME = "immich/BackgroundWorkerV1"

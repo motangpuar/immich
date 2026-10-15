@@ -2,13 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:background_downloader/background_downloader.dart';
+import 'package:background_downloader/background_downloader.dart' hide Request;
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:http/http.dart';
 import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/infrastructure/repositories/network.repository.dart';
+
+// Import RUFH
+import 'package:immich_mobile/platform/background_worker_api.g.dart';
+
 import 'package:logging/logging.dart';
 
 final uploadRepositoryProvider = Provider((ref) => UploadRepository());
@@ -57,6 +61,26 @@ class UploadRepository {
     return FileDownloader().start();
   }
 
+  Future<bool> _serverSupportsRufh() async {
+    try {
+      final endpoint = Store.get(StoreKey.serverEndpoint);
+      logger.info('RUFH check: endpoint=$endpoint');
+      final url = '$endpoint/upload';
+      logger.info('RUFH check: URL=$url');
+      final res = await NetworkRepository.client.send(
+        Request('OPTIONS', Uri.parse(url)),
+      );
+      logger.info('RUFH check: status=${res.statusCode} headers=${res.headers}');
+      final supports = res.statusCode == 204 &&
+          res.headers.keys.any((k) => k.toLowerCase() == 'accept-patch');
+      logger.info('RUFH check: supports=$supports');
+      return supports;
+    } catch (e, st) {
+      logger.warning('RUFH check failed: $e\n$st');
+      rethrow;
+    }
+  }
+
   Future<UploadResult> uploadFile({
     required File file,
     required String originalFileName,
@@ -67,6 +91,28 @@ class UploadRepository {
     Client? httpClient,
   }) async {
     final String savedEndpoint = Store.get(StoreKey.serverEndpoint);
+
+    // RUFH: only for large files (avoids Cloudflare's 100 MB body cap),
+    // and only when the server advertises the endpoint.
+    const int rufhThreshold = 90 * 1024 * 1024; // 90 MiB
+    if (file.lengthSync() > rufhThreshold && await _serverSupportsRufh()) {
+      try {
+        final assetId = fields['deviceAssetId'] ?? file.path.hashCode.toString();
+        final remoteAssetId = await BackgroundWorkerFgHostApi().uploadRufh(
+          RufhUploadRequest(
+            assetId: assetId,
+            filePath: file.path,
+            fileSize: file.lengthSync(),
+            fileMtime: file.lastModifiedSync().millisecondsSinceEpoch,
+            serverUrl: savedEndpoint,
+          ),
+        );
+        return UploadResult.success(remoteAssetId: remoteAssetId);
+      } catch (e) {
+        // RUFH failed — fall through to legacy multipart.
+        logger.warning('RUFH upload failed, falling back to multipart: $e');
+      }
+    }
 
     ProgressMultipartRequest buildRequest() {
       final request = ProgressMultipartRequest(
