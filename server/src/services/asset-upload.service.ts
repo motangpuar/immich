@@ -72,7 +72,9 @@ export class AssetUploadService extends BaseService {
       if (isResumable) {
         this.sendInterimResponse(res, location, version, this.getUploadLimits(backup));
         // this is a 5xx to indicate the client should do offset retrieval and resume
-        res.status(500).send('Incomplete asset already exists');
+        res.status(500)
+            .set('Location', location)
+            .send('Incomplete asset already exists');
         return;
       }
     }

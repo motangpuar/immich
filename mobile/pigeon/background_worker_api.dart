@@ -46,9 +46,9 @@ abstract class BackgroundWorkerFgHostApi {
   // iOS Only: true when the OS started the process in the background for one of its background tasks
   bool wasLaunchedInBackground();
 
-  // Marked
-  @async
-  String uploadRufh(RufhUploadRequest request);
+  /// Enqueue a RUFH upload. Returns immediately; the transfer runs in a
+  /// WorkManager foreground service independent of the Flutter engine.
+  void enqueueRufhUpload(RufhUploadRequest request);
 
   void cancelRufhUpload(String assetId);
 }

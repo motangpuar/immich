@@ -2,13 +2,12 @@ package app.alextran.immich.background
 
 import io.flutter.plugin.common.BinaryMessenger
 import app.alextran.immich.core.HttpClientManager
-import app.alextran.immich.upload.RufhUploader
+import app.alextran.immich.upload.RufhUploadWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import java.io.File
 
 import android.content.Context
@@ -65,36 +64,8 @@ class BackgroundWorkerApiImpl(
     return false
   }
 
-  override fun uploadRufh(request: RufhUploadRequest, callback: (Result<String>) -> Unit) {
-      scope.launch {
-          try {
-              val baseClient = HttpClientManager.getClient()
-                  .newBuilder()
-                  .writeTimeout(0, TimeUnit.SECONDS)
-                  .readTimeout(300, TimeUnit.SECONDS)
-                  .callTimeout(0, TimeUnit.SECONDS)
-                  .build()
-  
-              val uploader = RufhUploader(baseClient, request.serverUrl)
-              val progressApi = messenger?.let { RufhProgressFlutterApi(it) }
-              val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
-  
-              val assetId = uploader.upload(
-                  assetId = request.assetId,
-                  file = File(request.filePath),
-                  deviceId = deviceId(),
-                  onChunkComplete = { committed: Long, total: Long ->
-                      mainHandler.post {
-                          progressApi?.onRufhProgress(request.assetId, committed, total) {}
-                      }
-                  },
-              )
-  
-              withContext(Dispatchers.Main) { callback(Result.success(assetId)) }
-          } catch (e: Exception) {
-              withContext(Dispatchers.Main) { callback(Result.failure(e)) }
-          }
-      }
+  override fun enqueueRufhUpload(request: RufhUploadRequest) {
+      RufhUploadWorker.enqueue(ctx, request)
   }
 
   override fun cancelRufhUpload(assetId: String) {

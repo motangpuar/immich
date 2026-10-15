@@ -99,7 +99,9 @@ class BackupRepository extends DatabaseAccessor<Drift> with $BackupRepositoryMix
               _db.remoteAssetEntity.selectOnly()
                 ..addColumns([_db.remoteAssetEntity.checksum])
                 ..where(
-                  _db.remoteAssetEntity.checksum.equalsExp(lae.checksum) & _db.remoteAssetEntity.ownerId.equals(userId),
+                  _db.remoteAssetEntity.checksum.equalsExp(lae.checksum) &
+                      _db.remoteAssetEntity.ownerId.equals(userId) &
+                      _db.remoteAssetEntity.visibility.equalsValue(AssetVisibility.timeline),
                 ),
             ) &
             lae.id.isNotInQuery(_getExcludedSubquery()),

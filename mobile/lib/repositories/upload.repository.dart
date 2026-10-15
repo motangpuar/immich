@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart' hide Request;
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:http/http.dart';
 import 'package:immich_mobile/constants/constants.dart';
@@ -23,6 +24,9 @@ class UploadRepository {
   void Function(TaskProgressUpdate)? onTaskProgress;
   void Function(int bytes, int totalBytes)? _rufhOnProgress;
   String? _rufhActiveAssetId;
+
+  // Mutex lock to prevent race condition of partial continue
+  static final Map<String, Completer<void>> _rufhLocks = {};
 
   UploadRepository() {
     FileDownloader().registerCallbacks(
@@ -106,28 +110,22 @@ class UploadRepository {
     final int fileSize = file.lengthSync();   // <— ADD THIS LINE
     const int rufhThreshold = 90 * 1024 * 1024; // 90 MiB
     if (fileSize > rufhThreshold && await _serverSupportsRufh()) {
-      try {
-        final assetId = fields['deviceAssetId'] ?? file.path.hashCode.toString();
-        _rufhActiveAssetId = assetId;
-        _rufhOnProgress = onProgress;
-        final remoteAssetId = await BackgroundWorkerFgHostApi().uploadRufh(
-          RufhUploadRequest(
-            assetId: assetId,
-            filePath: file.path,
-            fileSize: fileSize,
-            fileMtime: file.lastModifiedSync().millisecondsSinceEpoch,
-            serverUrl: savedEndpoint,
-          ),
-        );
-        _rufhActiveAssetId = null;
-        _rufhOnProgress = null;
-        return UploadResult.success(remoteAssetId: remoteAssetId);
-      } catch (e, st) {
-        _rufhActiveAssetId = null;
-        _rufhOnProgress = null;
-        logger.severe('RUFH: FAILED $e\n$st');
-        rethrow;
-      }
+      final assetId = fields['deviceAssetId'] ?? file.path.hashCode.toString();
+      logger.info('RUFH: enqueueing background upload for $assetId');
+
+      BackgroundWorkerFgHostApi().enqueueRufhUpload(
+        RufhUploadRequest(
+          assetId: assetId,
+          filePath: file.path,
+          fileSize: fileSize,
+          fileMtime: file.lastModifiedSync().millisecondsSinceEpoch,
+          serverUrl: savedEndpoint,
+        ),
+      );
+
+      // The Kotlin worker owns the transfer from here. It notifies completion
+      // via the sync stream once the server-side asset transitions to visible.
+      return UploadResult.success(remoteAssetId: 'pending');
     }
 
     ProgressMultipartRequest buildRequest() {
