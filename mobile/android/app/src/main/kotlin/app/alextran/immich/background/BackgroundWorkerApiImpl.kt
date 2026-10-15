@@ -1,5 +1,6 @@
 package app.alextran.immich.background
 
+import io.flutter.plugin.common.BinaryMessenger
 import app.alextran.immich.core.HttpClientManager
 import app.alextran.immich.upload.RufhUploader
 import kotlinx.coroutines.CoroutineScope
@@ -26,7 +27,10 @@ import java.util.concurrent.TimeUnit
 
 private const val TAG = "BackgroundWorkerApiImpl"
 
-class BackgroundWorkerApiImpl(context: Context) : BackgroundWorkerFgHostApi {
+class BackgroundWorkerApiImpl(
+    context: Context,
+    private val messenger: BinaryMessenger? = null,
+) : BackgroundWorkerFgHostApi {
   private val ctx: Context = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -62,28 +66,35 @@ class BackgroundWorkerApiImpl(context: Context) : BackgroundWorkerFgHostApi {
   }
 
   override fun uploadRufh(request: RufhUploadRequest, callback: (Result<String>) -> Unit) {
-    scope.launch {
-      try {
-        val client: OkHttpClient = HttpClientManager.getClient()
-          .newBuilder()
-          .writeTimeout(0, TimeUnit.SECONDS)  // streaming body, no write timeout
-          .readTimeout(300, TimeUnit.SECONDS)   // wait up to 5 min for server response
-          .callTimeout(0, TimeUnit.SECONDS)
-          .build()
-
-        val uploader = RufhUploader(client, request.serverUrl)
-        val uploadId = uploader.upload(
-          assetId = request.assetId,
-          file = File(request.filePath),
-          deviceId = deviceId(),
-        )
-        // The server returns the upload ID as the asset ID on completion.
-        // If your server returns a different ID in the 201 body, parse it here.
-        withContext(Dispatchers.Main) { callback(Result.success(uploadId)) }
-      } catch (e: Exception) {
-        withContext(Dispatchers.Main) { callback(Result.failure(e)) }
+      scope.launch {
+          try {
+              val baseClient = HttpClientManager.getClient()
+                  .newBuilder()
+                  .writeTimeout(0, TimeUnit.SECONDS)
+                  .readTimeout(300, TimeUnit.SECONDS)
+                  .callTimeout(0, TimeUnit.SECONDS)
+                  .build()
+  
+              val uploader = RufhUploader(baseClient, request.serverUrl)
+              val progressApi = messenger?.let { RufhProgressFlutterApi(it) }
+              val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+  
+              val assetId = uploader.upload(
+                  assetId = request.assetId,
+                  file = File(request.filePath),
+                  deviceId = deviceId(),
+                  onChunkComplete = { committed: Long, total: Long ->
+                      mainHandler.post {
+                          progressApi?.onRufhProgress(request.assetId, committed, total) {}
+                      }
+                  },
+              )
+  
+              withContext(Dispatchers.Main) { callback(Result.success(assetId)) }
+          } catch (e: Exception) {
+              withContext(Dispatchers.Main) { callback(Result.failure(e)) }
+          }
       }
-    }
   }
 
   override fun cancelRufhUpload(assetId: String) {

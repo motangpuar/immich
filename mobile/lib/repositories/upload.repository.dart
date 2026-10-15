@@ -21,6 +21,8 @@ class UploadRepository {
   final Logger logger = Logger('UploadRepository');
   void Function(TaskStatusUpdate)? onUploadStatus;
   void Function(TaskProgressUpdate)? onTaskProgress;
+  void Function(int bytes, int totalBytes)? _rufhOnProgress;
+  String? _rufhActiveAssetId;
 
   UploadRepository() {
     FileDownloader().registerCallbacks(
@@ -38,6 +40,13 @@ class UploadRepository {
       taskStatusCallback: (update) => onUploadStatus?.call(update),
       taskProgressCallback: (update) => onTaskProgress?.call(update),
     );
+    RufhProgressFlutterApi.setUp(_RufhProgressHandler(this));
+  }
+
+  void _handleRufhProgress(String assetId, int committed, int total) {
+    if (assetId == _rufhActiveAssetId) {
+      _rufhOnProgress?.call(committed, total);
+    }
   }
 
   Future<List<bool>> enqueueBackgroundAll(List<UploadTask> tasks) {
@@ -94,23 +103,30 @@ class UploadRepository {
 
     // RUFH: only for large files (avoids Cloudflare's 100 MB body cap),
     // and only when the server advertises the endpoint.
+    final int fileSize = file.lengthSync();   // <— ADD THIS LINE
     const int rufhThreshold = 90 * 1024 * 1024; // 90 MiB
-    if (file.lengthSync() > rufhThreshold && await _serverSupportsRufh()) {
+    if (fileSize > rufhThreshold && await _serverSupportsRufh()) {
       try {
         final assetId = fields['deviceAssetId'] ?? file.path.hashCode.toString();
+        _rufhActiveAssetId = assetId;
+        _rufhOnProgress = onProgress;
         final remoteAssetId = await BackgroundWorkerFgHostApi().uploadRufh(
           RufhUploadRequest(
             assetId: assetId,
             filePath: file.path,
-            fileSize: file.lengthSync(),
+            fileSize: fileSize,
             fileMtime: file.lastModifiedSync().millisecondsSinceEpoch,
             serverUrl: savedEndpoint,
           ),
         );
+        _rufhActiveAssetId = null;
+        _rufhOnProgress = null;
         return UploadResult.success(remoteAssetId: remoteAssetId);
-      } catch (e) {
-        // RUFH failed — fall through to legacy multipart.
-        logger.warning('RUFH upload failed, falling back to multipart: $e');
+      } catch (e, st) {
+        _rufhActiveAssetId = null;
+        _rufhOnProgress = null;
+        logger.severe('RUFH: FAILED $e\n$st');
+        rethrow;
       }
     }
 
@@ -173,6 +189,15 @@ class UploadRepository {
       logger.warning("Error uploading $logContext: $error: $stackTrace");
       return UploadResult.error(errorMessage: error.toString());
     }
+  }
+}
+
+class _RufhProgressHandler implements RufhProgressFlutterApi {
+  final UploadRepository repo;
+  _RufhProgressHandler(this.repo);
+  @override
+  Future<void> onRufhProgress(String assetId, int committedOffset, int totalSize) async {
+    repo._handleRufhProgress(assetId, committedOffset, totalSize);
   }
 }
 

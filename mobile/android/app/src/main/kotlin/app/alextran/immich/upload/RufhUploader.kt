@@ -47,20 +47,25 @@ class RufhUploader(
      * Performs the full resumable upload and returns the upload/session ID
      * assigned by the server. On Immich, this ID equals the asset ID.
      */
-    fun upload(assetId: String, file: File, deviceId: String): String {
+    fun upload(
+        assetId: String,
+        file: File,
+        deviceId: String,
+        onChunkComplete: (committed: Long, total: Long) -> Unit = { _, _ -> },
+    ): String {
         val digest = sha1Base64(file)
         val uploadId = create(assetId, file, digest, deviceId)
-
+    
         var offset = head(uploadId)
         if (offset < 0) error("Session expired immediately after create")
-
+    
         var chunkSize = DEFAULT_CHUNK
-
+    
         while (offset < file.length()) {
             val remaining = file.length() - offset
             val thisChunk = minOf(chunkSize, remaining)
             val isLast = offset + thisChunk >= file.length()
-
+    
             val req = Request.Builder()
                 .url("$baseUrl/upload/$uploadId")
                 .header("upload-draft-interop-version", INTEROP_VER.toString())
@@ -69,11 +74,12 @@ class RufhUploader(
                 .header("content-type", PARTIAL_CT)
                 .patch(FileRangeBody(file, offset, thisChunk))
                 .build()
-
+    
             client.newCall(req).execute().use { resp ->
                 when (resp.code) {
                     in 200..204 -> {
                         offset += thisChunk
+                        onChunkComplete(offset, file.length())
                         chunkSize = (chunkSize * GROWTH_FACTOR).toLong().coerceAtMost(MAX_CHUNK)
                     }
                     413, 524 -> {

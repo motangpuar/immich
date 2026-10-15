@@ -9,6 +9,12 @@ class RufhUploadRequest {
   final String serverUrl;
 }
 
+@FlutterApi()
+abstract class RufhProgressFlutterApi {
+  @async
+  void onRufhProgress(String assetId, int committedOffset, int totalSize);
+}
+
 @ConfigurePigeon(
   PigeonOptions(
     dartOut: 'lib/platform/background_worker_api.g.dart',

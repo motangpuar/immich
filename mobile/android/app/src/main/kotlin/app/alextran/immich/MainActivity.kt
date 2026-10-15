@@ -59,7 +59,7 @@ class MainActivity : FlutterFragmentActivity() {
       LocalImageApi.setUp(messenger, LocalImagesImpl(ctx))
       RemoteImageApi.setUp(messenger, RemoteImagesImpl(ctx))
 
-      BackgroundWorkerFgHostApi.setUp(messenger, BackgroundWorkerApiImpl(ctx))
+      BackgroundWorkerFgHostApi.setUp(messenger, BackgroundWorkerApiImpl(ctx, messenger))
       ConnectivityApi.setUp(messenger, ConnectivityApiImpl(ctx))
 
       flutterEngine.plugins.add(ViewIntentPlugin())
